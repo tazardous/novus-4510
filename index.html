@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <meta name="theme-color" content="#1d1f21">
+<meta name="color-scheme" content="dark">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,6 +14,8 @@
 <title>Novus 4510 Mathematician</title>
 <style>
   :root{
+    color-scheme:dark;
+    forced-color-adjust:none;
     --shell:      #e9e3d1;
     --shell-hi:   #f5f0e2;
     --shell-lo:   #cdc6b0;
@@ -148,6 +151,9 @@
   }
   sup{font-size:.7em;vertical-align:.45em}
   .ital{font-style:italic}
+  .sqrt{white-space:nowrap}
+  .sqrt i{display:inline-block;width:15px;height:0;
+    border-top:1.4px solid var(--legend);vertical-align:6px;margin-left:-1px}
 
   button.key{
     -webkit-appearance:none;appearance:none;border:none;
@@ -488,7 +494,7 @@ const BANK = [
   K("1/<i>x</i>","", ()=>unaryK(v=> v!==0 ? 1/v : NaN), null, "k-fn"),
 
   K("&#960;","", ()=>liftIn(Math.PI), null, "k-fn"),
-  K("&#8730;&#773;","<i>x</i><sup>2</sup>", ()=>unaryK(v=> v>=0 ? Math.sqrt(v) : NaN), ()=>unaryK(v=>v*v), "k-fn"),
+  K("<span class=\"sqrt\">&#8730;<i></i></span>","<i>x</i><sup>2</sup>", ()=>unaryK(v=> v>=0 ? Math.sqrt(v) : NaN), ()=>unaryK(v=>v*v), "k-fn"),
   K("log","", ()=>unaryZ(v=> v>0 ? Math.log10(v) : NaN), null, "k-fn"),
   K("<i>x</i> &#10231; <i>y</i>","", swapXY, null, "k-fn", true),
 
