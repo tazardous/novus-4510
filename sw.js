@@ -1,6 +1,6 @@
 /* Cache-first service worker. Bump CACHE when you change any file
    so the phone picks up the new version instead of the cached one. */
-const CACHE = "novus4510-v2";
+const CACHE = "novus4510-v5";
 const FILES = [
   "./",
   "./index.html",

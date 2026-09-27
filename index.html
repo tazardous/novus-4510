@@ -265,16 +265,32 @@
   </div>
   <div class="notes">
     <p><b>Four register classes</b>, per the manual's diagrams.
-    <code>+ − × ÷</code>: X gets the result, Y takes Z, Z clears.
+    <code>+ &minus; &times; &divide;</code>: X gets the result, Y takes Z, Z clears.
     <code>y<sup>x</sup></code>: Y takes the old X, Z clears.
     <code>sin cos tan ln log e<sup>x</sup></code> and inverses: Y holds, Z clears.
-    <code>1/x √ x<sup>2</sup> rad deg</code>: Y and Z both hold.
+    <code>1/x &radic; x<sup>2</sup> rad deg</code>: Y and Z both hold.
     Nothing is ever replicated downward.</p>
-    <p><b>C↓ rolls the stack down</b> — X discarded, Y→X, Z→Y, 0 into Z. Not a clear key.
-    F then C↓ cancels the shift and changes nothing.</p>
-    <p><b>Lift</b> is suppressed only right after ENT↑. π and MR lift unconditionally.
-    Trig is always degrees; <code>rad</code> and <code>deg</code> convert X.
-    An error zeroes X and Z, leaving Y and M intact.</p>
+    <p><b>C&darr; rolls the stack down</b> &mdash; X discarded, Y&rarr;X, Z&rarr;Y, 0 into Z.
+    Three presses therefore clear everything but memory. F then C&darr; cancels the shift.
+    <b>Lift</b> is suppressed only right after ENT&uarr;. &pi; and MR lift unconditionally.</p>
+    <p><b>Error limits</b> are Appendix C of the manual, not approximations:
+    <code>tan</code> above 90&deg;, <code>sin</code> and <code>cos</code> at 401&deg;,
+    <code>sin<sup>-1</sup> cos<sup>-1</sup></code> above 1, <code>&radic;</code> of a negative,
+    <code>ln</code> and <code>log</code> of zero or less, <code>e<sup>x</sup></code> outside
+    &minus;28 to 18.42068, <code>y<sup>x</sup></code> with a non-positive base, and
+    <code>&divide;</code> or <code>1/x</code> at or below 10<sup>-8</sup>.
+    An error zeroes X and Z and leaves Y and memory intact. C&darr; clears it; so does any
+    other key except <code>1/x &divide; log ln</code>, which leave it standing.
+    Memory overflow is reported without disturbing memory.</p>
+    <p><b>Details from the manual.</b> &pi; is the truncated 3.1415926.
+    <code>y<sup>x</sup></code> is computed as e<sup>x&middot;ln&nbsp;y</sup>, as the original did.
+    Trig is degrees only. No scientific notation. The display shuts off after 35 seconds
+    idle, showing only decimal points &mdash; nothing is lost, and any key wakes it.</p>
+    <p><b>Eight digits, no guard digits.</b> Registers are truncated to eight
+    positions after every operation, not just at display &mdash; the manual's sphere
+    program proves it. Every numeric result printed in the manual reproduces exactly,
+    with one exception: <code>y<sup>x</sup></code> goes through the ROM's own log and
+    antilog, so 1.085<sup>10</sup> reads 2.26098 on real hardware and 2.2609834 here.</p>
     <p>Keyboard: digits, <code>. + - * /</code>, <code>Enter</code>,
     <code>Backspace</code> (C↓), <code>f</code>, <code>c</code> (CHS),
     <code>x</code> (x↔y), <code>Esc</code>.</p>
@@ -339,6 +355,15 @@ function paint(chars, dots){
   }
 }
 
+/* Display shutoff after 35 s idle: every decimal point, no digits.
+   Data is untouched; any key brings it back. CHS twice restores it
+   without changing anything, since two sign flips cancel. */
+function showSleep(){
+  const chars = new Array(POS).fill(" ");
+  const dots  = new Array(POS).fill(true);
+  paint(chars, dots);
+}
+
 /* Error on real hardware: eight zeros, every decimal point lit. */
 function showError(){
   const chars = new Array(POS).fill(" ");
@@ -384,15 +409,65 @@ function show(text){
    F followed by C-down cancels the shift and changes nothing.
    An error zeroes X and Z, leaves Y and M intact.
    ============================================================ */
-const M = { x:0, y:0, z:0, mem:0, entry:null, lift:true, err:false, shift:false };
+const M = { x:0, y:0, z:0, mem:0, entry:null, lift:true, err:false, shift:false, asleep:false };
 const OVER = 1e8, UNDER = 1e-7;
+const TINY = 1e-8;                 // divide / reciprocal floor, Appendix C
+const PI    = 3.1415926;           // as the pi key delivers it: 8 digits, truncated
+const EXP_HI = 18.42068, EXP_LO = -28;   // e^x limits
+const PWR_HI = 18.42060;                 // y^x limit on x*ln(y)
+
+/* Appendix C - conditions for error indication. Each returns NaN to trip it. */
+const FN = {
+  recip : v => Math.abs(v) <= TINY ? NaN : 1/v,
+  sqrt  : v => v < 0 ? NaN : Math.sqrt(v),
+  sq    : v => v*v,
+  ln    : v => v <= 0 ? NaN : Math.log(v),
+  log   : v => v <= 0 ? NaN : Math.log10(v),
+  exp   : v => (v > EXP_HI || v < EXP_LO) ? NaN : Math.exp(v),
+  sin   : v => Math.abs(v) >= 401 ? NaN : Math.sin(v*D2R),
+  cos   : v => Math.abs(v) >= 401 ? NaN : Math.cos(v*D2R),
+  tan   : v => Math.abs(v) >= 90  ? NaN : Math.tan(v*D2R),
+  asin  : v => Math.abs(v) > 1 ? NaN : Math.asin(v)*R2D,
+  acos  : v => Math.abs(v) > 1 ? NaN : Math.acos(v)*R2D,
+  atan  : v => v > 99999999 ? NaN : Math.atan(v)*R2D,
+  div   : (y,x) => Math.abs(x) <= TINY ? NaN : y/x
+};
+
+/* y^x is computed by log and antilog on the real machine, which is why
+   256 ENT 4 1/x y^x gives 3.999998 rather than 4. Reproduced deliberately. */
+function powLogAntilog(y, x){
+  if(y <= 0) return NaN;
+  /* The machine computes y^x as e^(x ln y), which is why the manual's
+     4th root of 256 reads 3.999998 rather than 4. The structure is
+     reproduced here; the ROM's exact internal rounding is not, so that
+     particular discrepancy does not appear. Domain limits below are
+     Appendix C and are exact. */
+  const t = x * Math.log(y);
+  if(t > PWR_HI || t < EXP_LO) return NaN;
+  return Math.exp(t);
+}
 
 function raiseError(){ M.err=true; M.entry=null; M.x=0; M.z=0; M.lift=true; }
+
+/* Eight digit positions and no guard digits: the registers hold exactly what
+   the display can show, truncated. The manual's sphere program proves it —
+   4*pi*r^2 for r=1 reads 12.56637, and dividing that by 3 gives 4.18879
+   exactly, which only works if 12.5663704 was already cut to eight places. */
+function trunc8(v){
+  if(v === 0) return 0;
+  const neg = v < 0;
+  const a = Number(Math.abs(v).toPrecision(11));
+  const intLen = (a >= 1) ? Math.floor(Math.log10(a)) + 1 : 0;
+  const dec = Math.max(0, NDIG - intLen);
+  const p = Math.pow(10, dec);
+  const t = Math.trunc(a * p) / p;
+  return neg ? -t : t;
+}
 
 function chk(v){
   if(!isFinite(v) || isNaN(v) || Math.abs(v) >= OVER){ raiseError(); return null; }
   if(v !== 0 && Math.abs(v) < UNDER) return 0;
-  return v;
+  return trunc8(v);
 }
 function commit(){
   if(M.entry !== null){ M.x = parseFloat(M.entry) || 0; M.entry = null; }
@@ -418,7 +493,7 @@ function unaryZ(fn){ commit(); const v=chk(fn(M.x)); if(v===null)return; M.x=v; 
 function unaryK(fn){ commit(); const v=chk(fn(M.x)); if(v===null)return; M.x=v; M.lift=true; }
 function powerYX(){
   commit(); const oldX=M.x;
-  const v=chk(Math.pow(M.y,M.x)); if(v===null)return;
+  const v=chk(powLogAntilog(M.y,M.x)); if(v===null)return;
   M.x=v; M.y=oldX; M.z=0; M.lift=true;
 }
 function binary(fn){
@@ -427,7 +502,12 @@ function binary(fn){
 }
 function liftIn(v){ commit(); M.z=M.y; M.y=M.x; M.x=v; M.lift=true; }
 function swapXY(){ commit(); const t=M.x; M.x=M.y; M.y=t; M.lift=true; }
-function memOp(fn){ commit(); M.mem=fn(M.mem,M.x); M.lift=true; }
+function memOp(fn){
+  commit();
+  const r = fn(M.mem, M.x);
+  if(!isFinite(r) || Math.abs(r) >= OVER){ raiseError(); return; }  // memory kept
+  M.mem = r; M.lift = true;
+}
 function clearAll(){
   M.x=M.y=M.z=M.mem=0; M.entry=null; M.lift=true; M.err=false; M.shift=false;
   render();
@@ -438,20 +518,29 @@ const D2R = Math.PI/180, R2D = 180/Math.PI;
    FORMATTING
    ============================================================ */
 function fmt(v){
+  /* The display truncates to eight digits, it does not round. The manual's
+     4*pi*r^2 for r=3.25 reads 132.73228, where rounding would give ...29.
+     Binary noise is cleaned at 11 digits first so that values like 0.8
+     arriving as 0.7999999999999999 do not truncate to 0.7999999. */
   if(v === 0) return "0.";
-  const neg = v < 0; const a = Math.abs(v);
-  const intLen = (a >= 1) ? Math.floor(Math.log10(a)) + 1 : 1;
+  const neg = v < 0;
+  const a = Number(Math.abs(v).toPrecision(11));
+  const intLen = (a >= 1) ? Math.floor(Math.log10(a)) + 1 : 0;
   if(intLen > NDIG) return null;
-  let s = a.toFixed(Math.max(0, NDIG - intLen));
-  if(parseFloat(s) === 0 && a !== 0) return null;
-  if(Math.abs(parseFloat(s)) >= OVER) return null;
+  const dec = Math.max(0, NDIG - intLen);
+  const p = Math.pow(10, dec);
+  const t = Math.trunc(a * p) / p;
+  if(t === 0 && a !== 0) return null;
+  if(t >= OVER) return null;
+  let s = t.toFixed(dec);
   if(s.includes(".")) s = s.replace(/0+$/,"");
   if(!s.includes(".")) s += ".";
   return (neg ? "-" : "") + s;
 }
 
 function render(){
-  if(M.err) showError();
+  if(M.asleep) showSleep();
+  else if(M.err) showError();
   else if(M.entry !== null) show(M.entry);
   else {
     const t = fmt(M.x);
@@ -480,22 +569,22 @@ function trace(t){
 /* ============================================================
    KEYS — legend above, key, gold shifted legend below
    ============================================================ */
-const K = (a,b,f,g,cls,small)=>({a,b,f,g,cls,small});
+const K = (a,b,f,g,cls,small,holds)=>({a,b,f,g,cls,small,holds});
 
 const BANK = [
   K("F","",             ()=>{}, null, "k-f"),
-  K("sin","sin<sup>-1</sup>", ()=>unaryZ(v=>Math.sin(v*D2R)),  ()=>unaryZ(v=>Math.asin(v)*R2D), "k-fn"),
-  K("cos","cos<sup>-1</sup>", ()=>unaryZ(v=>Math.cos(v*D2R)),  ()=>unaryZ(v=>Math.acos(v)*R2D), "k-fn"),
-  K("tan","tan<sup>-1</sup>", ()=>unaryZ(v=>Math.tan(v*D2R)),  ()=>unaryZ(v=>Math.atan(v)*R2D), "k-fn"),
+  K("sin","sin<sup>-1</sup>", ()=>unaryZ(FN.sin), ()=>unaryZ(FN.asin), "k-fn"),
+  K("cos","cos<sup>-1</sup>", ()=>unaryZ(FN.cos), ()=>unaryZ(FN.acos), "k-fn"),
+  K("tan","tan<sup>-1</sup>", ()=>unaryZ(FN.tan), ()=>unaryZ(FN.atan), "k-fn"),
 
   K("<i>y</i><sup><i>x</i></sup>","", powerYX, null, "k-fn"),
-  K("<i>e</i><sup><i>x</i></sup>","", ()=>unaryZ(Math.exp), null, "k-fn"),
-  K("ln","",  ()=>unaryZ(v=> v>0 ? Math.log(v) : NaN), null, "k-fn"),
-  K("1/<i>x</i>","", ()=>unaryK(v=> v!==0 ? 1/v : NaN), null, "k-fn"),
+  K("<i>e</i><sup><i>x</i></sup>","", ()=>unaryZ(FN.exp), null, "k-fn"),
+  K("ln","",  ()=>unaryZ(FN.ln), null, "k-fn", false, true),
+  K("1/<i>x</i>","", ()=>unaryK(FN.recip), null, "k-fn", false, true),
 
-  K("&#960;","", ()=>liftIn(Math.PI), null, "k-fn"),
-  K("<span class=\"sqrt\">&#8730;<i></i></span>","<i>x</i><sup>2</sup>", ()=>unaryK(v=> v>=0 ? Math.sqrt(v) : NaN), ()=>unaryK(v=>v*v), "k-fn"),
-  K("log","", ()=>unaryZ(v=> v>0 ? Math.log10(v) : NaN), null, "k-fn"),
+  K("&#960;","", ()=>liftIn(PI), null, "k-fn"),
+  K("<span class=\"sqrt\">&#8730;<i></i></span>","<i>x</i><sup>2</sup>", ()=>unaryK(FN.sqrt), ()=>unaryK(FN.sq), "k-fn"),
+  K("log","", ()=>unaryZ(FN.log), null, "k-fn", false, true),
   K("<i>x</i> &#10231; <i>y</i>","", swapXY, null, "k-fn", true),
 
   K("MR","", ()=>liftIn(M.mem), null, "k-fn"),
@@ -513,7 +602,7 @@ const PAD = [
 ];
 
 const COL = [
-  K("&#247;","rad", ()=>binary((y,x)=> x!==0 ? y/x : NaN), ()=>unaryK(v=>v*D2R), "k-op"),
+  K("&#247;","rad", ()=>binary(FN.div), ()=>unaryK(v=>v*D2R), "k-op", false, true),
   K("&#215;","deg", ()=>binary((y,x)=>y*x),                ()=>unaryK(v=>v*R2D), "k-op"),
   K("&#8722;","M &#8722;", ()=>binary((y,x)=>y-x), ()=>memOp((m,x)=>m-x), "k-op"),
   K("+","M +",             ()=>binary((y,x)=>y+x), ()=>memOp((m,x)=>m+x), "k-op")
@@ -549,10 +638,28 @@ mount(BANK, document.getElementById("bank"), "bank");
 mount(PAD,  document.getElementById("pad"),  "pad");
 mount(COL,  document.getElementById("col"),  "col");
 
+let sleepTimer = null;
+function stayAwake(){
+  M.asleep = false;
+  clearTimeout(sleepTimer);
+  sleepTimer = setTimeout(()=>{ M.asleep = true; render(); }, 35000);
+}
+
 function fire(k, el){
+  const wasAsleep = M.asleep;
+  stayAwake();
   if(k.cls === "k-f"){ M.shift = !M.shift; render(); trace("F"); return; }
   const label = (M.shift && k.g) ? strip(k.b) : strip(k.a);
-  M.err = false;                       // registers already reset when it tripped
+
+  /* Manual p.7: C-down clears the error and restarts the problem. Any other
+     key clears it and carries on with X taken as zero - except 1/x, div, log
+     and ln, which leave the error standing. */
+  if(M.err){
+    if(k.holds){ trace(label); render(); return; }
+    M.err = false;                     // X and Z were already zeroed
+  }
+  if(wasAsleep && k.f === chs){ render(); return; }   // CHS wakes without acting
+
   if(M.shift && k.g) k.g(); else k.f();
   M.shift = false;
   trace(label);
@@ -607,6 +714,7 @@ document.addEventListener("pointerdown", e=>{
 if("serviceWorker" in navigator)
   window.addEventListener("load", ()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
 
+stayAwake();
 render();
 })();
 </script>
